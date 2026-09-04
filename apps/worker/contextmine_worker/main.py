@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from pathlib import Path
 
 from contextmine_core import get_settings
 from contextmine_core.lsp import shutdown_lsp_manager
@@ -13,6 +14,13 @@ from contextmine_worker.init_prefect import init_prefect
 
 logger = logging.getLogger(__name__)
 
+# The deployments below use a relative entrypoint (e.g. "contextmine_worker/flows.py:...")
+# resolved against this directory. The ProcessWorker's default `working_dir` job variable
+# is `null`, which makes it launch each flow run in a fresh temporary directory instead of
+# here - causing the relative entrypoint to be unresolvable and the flow run to crash with
+# FileNotFoundError. Pin `working_dir` so flow runs execute with the correct CWD.
+_WORKER_ROOT = Path(__file__).resolve().parent.parent
+
 
 def configure_deployments() -> None:
     """Apply the two supported source-sync deployments."""
@@ -21,10 +29,12 @@ def configure_deployments() -> None:
         name="default",
         interval=settings.prefect_due_interval_seconds,
         work_pool_name=settings.prefect_work_pool_name,
+        job_variables={"working_dir": str(_WORKER_ROOT)},
     ).apply()
     sync_single_source.to_deployment(
         name="default",
         work_pool_name=settings.prefect_work_pool_name,
+        job_variables={"working_dir": str(_WORKER_ROOT)},
     ).apply()
 
 

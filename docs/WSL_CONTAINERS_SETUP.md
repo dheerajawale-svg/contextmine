@@ -280,12 +280,28 @@ From WSL, containers on published ports are reachable at `localhost:5433` / `loc
 
 ## 6. Teardown & cleanup
 
+Depending on your goal:
+
+### Option A: Routine shutdown (Stop only — recommended for daily use)
+Stops containers without deleting them. Containers and network configurations are preserved. On your next session or reboot, simply run **Section 5 (Step 1: Start existing containers)**.
+
 ```bash
 wslc.exe container stop contextmine-worker contextmine-api contextmine-prefect contextmine-postgres
-wslc.exe container prune        # remove stopped containers
-wslc.exe network remove contextmine-net   # remove the user-defined network
-wslc.exe image prune            # reclaim image disk space
-wslc.exe container inspect contextmine-api   # deep debug when needed
+```
+
+### Option B: Full wipe & reset (Clean slate / reclaim disk)
+Deletes containers and the network. On your next session or reboot, you will need to run **Section 5 (Alternative: Recreating from scratch)**.
+
+```bash
+# 1. Stop and remove containers
+wslc.exe container stop contextmine-worker contextmine-api contextmine-prefect contextmine-postgres
+wslc.exe container prune                  # deletes stopped containers
+
+# 2. Remove network
+wslc.exe network remove contextmine-net   # removes user-defined network
+
+# 3. (Optional) Reclaim unused image space
+wslc.exe image prune
 ```
 
 ## Caveats vs. Docker Compose

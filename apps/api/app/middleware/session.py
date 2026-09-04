@@ -33,7 +33,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 signer = get_signer()
                 unsigned = signer.unsign(cookie, max_age=SESSION_MAX_AGE)
                 session_data = json.loads(unsigned.decode())
-            except BadSignature, json.JSONDecodeError:
+            except (BadSignature, json.JSONDecodeError):
                 # Invalid or expired session, start fresh
                 session_data = {}
 

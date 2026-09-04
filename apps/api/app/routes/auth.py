@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Fixed identity for the DEBUG-mode login bypass. A single constant GitHub ID
+# keeps the local dev user stable across restarts (upsert semantics).
+DEV_USER_GITHUB_ID = 0
+DEV_USER_LOGIN = "local-dev-user"
+
 
 class UserResponse(BaseModel):
     """Response model for user data."""
@@ -43,13 +48,32 @@ class UserResponse(BaseModel):
 
 @router.get(
     "/login",
-    responses={500: {"description": "GitHub OAuth is not configured"}},
+    responses={
+        500: {"description": "GitHub OAuth is not configured"},
+        307: {"description": "Development auto-login redirect (DEBUG mode only)"},
+    },
 )
 @limiter.limit(RATE_LIMIT_AUTH)
 async def login(request: Request) -> RedirectResponse:
     """Initiate GitHub OAuth login flow."""
     settings = get_settings()
     if not settings.github_client_id:
+        if settings.debug:
+            # Development bypass: create/log in a local dev user without OAuth.
+            async with get_db_session() as db:
+                user = await upsert_github_user(
+                    db,
+                    {
+                        "id": DEV_USER_GITHUB_ID,
+                        "login": DEV_USER_LOGIN,
+                        "name": "Local Dev User",
+                    },
+                )
+                await db.commit()
+            session = get_session(request)
+            session["user_id"] = str(user.id)
+            set_session(request, session)
+            return RedirectResponse(url="/", status_code=307)
         raise HTTPException(status_code=500, detail="GitHub OAuth is not configured")
 
     # Generate and store state for CSRF protection

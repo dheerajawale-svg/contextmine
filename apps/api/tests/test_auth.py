@@ -41,12 +41,13 @@ class TestAuthRoutes:
     """Tests for auth route handlers."""
 
     async def test_login_requires_oauth_config(self, client: AsyncClient) -> None:
-        """Test that /api/auth/login returns 500 when OAuth not configured."""
+        """Test that /api/auth/login returns 500 when OAuth not configured (production)."""
         from unittest.mock import MagicMock
 
-        # Mock settings to return None for github_client_id
+        # Mock settings to return None for github_client_id and debug disabled
         mock_settings = MagicMock()
         mock_settings.github_client_id = None
+        mock_settings.debug = False
 
         with patch("app.routes.auth.get_settings", return_value=mock_settings):
             response = await client.get("/api/auth/login", follow_redirects=False)
@@ -54,6 +55,35 @@ class TestAuthRoutes:
             assert response.status_code == 500
             data = response.json()
             assert "not configured" in data["detail"].lower()
+
+    async def test_login_dev_bypass_when_debug(self, client: AsyncClient) -> None:
+        """Test that /api/auth/login auto-logs-in a dev user in DEBUG mode without OAuth."""
+        from unittest.mock import MagicMock, patch
+
+        mock_settings = MagicMock()
+        mock_settings.github_client_id = None
+        mock_settings.debug = True
+
+        fake_user = MagicMock()
+        fake_user.id = "00000000-0000-0000-0000-000000000001"
+        fake_user.github_login = "local-dev-user"
+        fake_user.name = "Local Dev User"
+        fake_user.avatar_url = None
+
+        async def fake_upsert(session, profile):
+            return fake_user
+
+        with (
+            patch("app.routes.auth.get_settings", return_value=mock_settings),
+            patch("app.routes.auth.upsert_github_user", side_effect=fake_upsert),
+        ):
+            response = await client.get("/api/auth/login", follow_redirects=False)
+
+        assert response.status_code == 307
+        assert response.headers["location"] == "/"
+        # The dev user id must be stored in the session cookie
+        set_cookie = response.headers.get("set-cookie", "")
+        assert "contextmine_session=" in set_cookie
 
     @patch("app.routes.auth.get_settings")
     @patch("app.routes.auth.get_github_authorize_url")

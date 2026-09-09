@@ -16,6 +16,7 @@ from contextmine_core.auth import (
     validate_ssh_private_key,
 )
 from contextmine_core.context import (
+    ContextGenerationError,
     ContextRequest,
     ContextResponse,
     FakeLLM,
@@ -101,6 +102,7 @@ __all__ = [
     "Base",
     "Chunk",
     "Collection",
+    "ContextGenerationError",
     "ContextRequest",
     "ContextResponse",
     "Embedder",

@@ -92,12 +92,13 @@ wslc.exe run -d --name contextmine-api \
   -p 8111:8000 \
   -e DEBUG=true \
   -e DATABASE_URL=postgresql+asyncpg://contextmine:contextmine@contextmine-postgres:5432/contextmine \
+  -e PREFECT_API_URL=http://contextmine-prefect:4200/api \
   -e SESSION_SECRET=dev-session-secret-change-in-production \
   -e TOKEN_ENCRYPTION_KEY=dev-encryption-key-change-in-production \
   contextmine-api
 ```
 
-*(Pass every needed `.env` value as `-e` flags; `wslc` `--env-file` support is undocumented — check `wslc run --help`. Note: `DEBUG=true` bypasses the requirement for `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` for local dev. If testing the full GitHub OAuth flow, append `-e GITHUB_CLIENT_ID=... -e GITHUB_CLIENT_SECRET=...`).*
+*(Pass every needed `.env` value as `-e` flags; `wslc` `--env-file` support is undocumented — check `wslc run --help`. Note: `DEBUG=true` bypasses the requirement for `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` for local dev. If testing the full GitHub OAuth flow, append `-e GITHUB_CLIENT_ID=... -e GITHUB_CLIENT_SECRET=...`. `PREFECT_API_URL` is **required** — the default `http://prefect-server:4200/api` does not resolve on `contextmine-net`, so `/api/sources/{id}/sync-now` fails with 502 without it. Append `-e MODEL_CALLS_ENABLED=false` for model-free operation (no AI API keys; FTS-only retrieval, deterministic extraction during sync).)*
 
 ### 3.4 Worker
 
@@ -211,6 +212,7 @@ wslc.exe run -d --name contextmine-api \
   -p 8111:8000 \
   -e DEBUG=true \
   -e DATABASE_URL=postgresql+asyncpg://contextmine:contextmine@contextmine-postgres:5432/contextmine \
+  -e PREFECT_API_URL=http://contextmine-prefect:4200/api \
   -e SESSION_SECRET=dev-session-secret-change-in-production \
   -e TOKEN_ENCRYPTION_KEY=dev-encryption-key-change-in-production \
   contextmine-api

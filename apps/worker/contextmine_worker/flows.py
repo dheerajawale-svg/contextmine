@@ -4189,6 +4189,9 @@ async def sync_web_source(
     base_url = config.get("base_url", start_url)  # Fall back to start_url for old sources
     max_pages = config.get("max_pages", DEFAULT_MAX_PAGES)
     delay_ms = config.get("delay_ms", DEFAULT_DELAY_MS)
+    # URL substrings to keep out of the index (e.g. Zendesk redirect stubs
+    # "/related/click" and search result pages "/search?")
+    exclude_patterns = config.get("exclude_patterns", [])
 
     if not base_url:
         raise ValueError("Web source missing base_url in config")
@@ -4209,6 +4212,7 @@ async def sync_web_source(
         start_url=start_url,
         max_pages=max_pages,
         delay_ms=delay_ms,
+        exclude_patterns=exclude_patterns,
     )
 
     stats.pages_crawled = len(pages)

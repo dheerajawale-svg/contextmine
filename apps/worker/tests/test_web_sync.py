@@ -7,6 +7,8 @@ from contextmine_worker.web_sync import (
     WebPage,
     WebSyncStats,
     _crawl_spider_md,
+    _extract_links_from_html,
+    _is_excluded,
     extract_markdown_with_trafilatura,
     get_page_title,
     is_url_in_scope,
@@ -170,3 +172,69 @@ class TestRunSpiderMd:
         ]
         pages = run_spider_md("https://example.com")
         assert len(pages) == 1
+
+
+# ---------------------------------------------------------------------------
+# exclude_patterns (noise URL filtering)
+# ---------------------------------------------------------------------------
+
+
+class TestIsExcluded:
+    def test_no_patterns_never_excludes(self) -> None:
+        assert not _is_excluded("https://example.com/related/click?x=1", None)
+        assert not _is_excluded("https://example.com/related/click?x=1", [])
+
+    def test_substring_match(self) -> None:
+        assert _is_excluded(
+            "https://docs.example.com/hc/en-us/related/click?data=abc", ["/related/click"]
+        )
+        assert _is_excluded("https://docs.example.com/hc/en-us/search?utf8=1", ["/search?"])
+        assert not _is_excluded("https://docs.example.com/hc/en-us/articles/123", ["/search?"])
+
+    def test_case_insensitive(self) -> None:
+        assert _is_excluded("https://example.com/Related/Click?x=1", ["/related/click"])
+
+
+class TestExcludePatternsInCrawlers:
+    @patch("contextmine_worker.web_sync.subprocess.run")
+    @patch("contextmine_worker.web_sync.extract_markdown_with_trafilatura")
+    def test_spider_md_output_filters_excluded_urls(
+        self, mock_extract: MagicMock, mock_run: MagicMock
+    ) -> None:
+        mock_extract.return_value = "A" * 60
+        lines = [
+            {"url": "https://example.com/articles/1", "html": "<p>a</p>", "title": "A"},
+            {
+                "url": "https://example.com/related/click?data=x",
+                "html": "<p>a</p>",
+                "title": "Dupe",
+            },
+        ]
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="\n".join(json.dumps(line) for line in lines) + "\n"
+        )
+
+        pages = _crawl_spider_md("https://example.com", exclude_patterns=["/related/click"])
+        assert [p.url for p in pages] == ["https://example.com/articles/1"]
+
+    def test_extract_links_skips_excluded(self) -> None:
+        from collections import deque
+
+        visited: set[str] = set()
+        queue: deque[str] = deque()
+        html = (
+            '<html><body><a href="/articles/1">a</a>'
+            '<a href="/related/click?data=x">dupe</a></body></html>'
+        )
+        _extract_links_from_html(
+            html, "https://example.com/", "https://example.com/", visited, queue, ["/related/click"]
+        )
+        assert list(queue) == ["https://example.com/articles/1"]
+
+    @patch("contextmine_worker.web_sync._crawl_spider_md")
+    def test_run_spider_md_passes_exclude_patterns(self, mock_spider: MagicMock) -> None:
+        mock_spider.return_value = [
+            WebPage(url="https://example.com", title="T", markdown="md", content_hash="h")
+        ]
+        run_spider_md("https://example.com", exclude_patterns=["/search?"])
+        assert mock_spider.call_args.kwargs["exclude_patterns"] == ["/search?"]

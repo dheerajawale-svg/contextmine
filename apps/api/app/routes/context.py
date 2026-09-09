@@ -115,7 +115,16 @@ async def create_context(request: Request, body: ContextRequest) -> ContextRespo
             model=body.model,
         )
     except Exception as e:
-        logger.exception("Error assembling context: %s", e)
+        logger.exception(
+            "Error assembling context (provider=%s, model=%s, collection_id=%s, "
+            "query=%.80r): %s: %s",
+            provider.value,
+            body.model or get_settings().default_llm_model,
+            body.collection_id,
+            body.query,
+            type(e).__name__,
+            e,
+        )
         raise HTTPException(
             status_code=500,
             detail="Error assembling context. Please try again.",
@@ -213,7 +222,18 @@ async def create_context_stream(request: Request, body: ContextRequest) -> Strea
 
         except Exception as e:
             # Send error event - log details server-side, return generic message
-            logger.exception("Error during context streaming: %s", e)
+            logger.exception(
+                "Error during context streaming (provider=%s, model=%s, collection_id=%s, "
+                "max_chunks=%s, max_tokens=%s, query=%.80r): %s: %s",
+                provider.value,
+                body.model or get_settings().default_llm_model,
+                body.collection_id,
+                body.max_chunks,
+                body.max_tokens,
+                body.query,
+                type(e).__name__,
+                e,
+            )
             data = json.dumps({"error": "An error occurred while generating context"})
             yield f"event: error\ndata: {data}\n\n"
 

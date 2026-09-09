@@ -1,6 +1,7 @@
 """Embedding service for generating vector embeddings."""
 
 import hashlib
+import math
 import struct
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -120,6 +121,11 @@ class FakeEmbedder(Embedder):
                     break
                 # Convert 4 bytes to float in range [-1, 1]
                 value = struct.unpack("f", hash_bytes[i : i + 4])[0]
+                # Arbitrary hash bytes can decode as NaN or +/-inf float32
+                # (exponent all 1s); pgvector rejects non-finite vector
+                # elements, so coerce them to a finite value.
+                if not math.isfinite(value):
+                    value = 0.0
                 # Normalize to [-1, 1]
                 normalized = (value % 2) - 1
                 embedding.append(normalized)

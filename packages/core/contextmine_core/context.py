@@ -1,5 +1,6 @@
 """Context assembly service for generating Markdown documents from retrieved chunks."""
 
+import logging
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -9,6 +10,12 @@ from enum import Enum
 from contextmine_core.model_policy import ensure_model_calls_enabled
 from contextmine_core.search import SearchResult, hybrid_search
 from contextmine_core.settings import get_settings, secret_value
+
+logger = logging.getLogger(__name__)
+
+
+class ContextGenerationError(RuntimeError):
+    """Raised when LLM generation fails during context assembly."""
 
 
 class LLMProvider(Enum):
@@ -433,6 +440,70 @@ def get_llm(
         raise ValueError(f"Unknown LLM provider: {provider}")
 
 
+async def _get_query_embedding(query: str) -> list[float] | None:
+    """Embed the query for hybrid search, degrading to FTS-only on failure.
+
+    Returns None when model calls are disabled or the embedding provider is
+    unavailable; hybrid_search then runs full-text search only. Previously the
+    embed_batch network call was unprotected, so any embedding API outage
+    (invalid key, quota, network) aborted the whole context request even
+    though FTS alone could have served results.
+    """
+    # Import here to avoid circular imports
+    from contextmine_core.embeddings import get_embedder, parse_embedding_model_spec
+
+    settings = get_settings()
+    if not settings.model_calls_enabled:
+        return None
+
+    try:
+        emb_provider, emb_model = parse_embedding_model_spec(settings.default_embedding_model)
+        embedder = get_embedder(emb_provider, emb_model)
+        embed_result = await embedder.embed_batch([query])
+        return embed_result.embeddings[0]
+    except Exception as exc:
+        logger.warning(
+            "Query embedding failed (%s: %s); falling back to full-text-only search.",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
+def _resolve_llm(provider: LLMProvider | str, model: str | None) -> LLM:
+    """Create the LLM for context generation with an explicit, logged fallback.
+
+    DEFAULT_LLM_MODEL applies when the requested provider matches the
+    configured default provider; other providers use their provider-specific
+    model setting. A missing API key falls back to FakeLLM so the endpoint
+    stays functional, but the fallback is now visible in the logs instead of
+    silently returning deterministic placeholder content.
+    """
+    settings = get_settings()
+    if isinstance(provider, str):
+        provider = LLMProvider(provider)
+
+    effective_model = model
+    if effective_model is None and provider.value == settings.default_llm_provider:
+        effective_model = settings.default_llm_model
+
+    try:
+        return get_llm(provider, effective_model)
+    except ValueError as exc:
+        logger.warning(
+            "LLM provider '%s' unavailable (%s); using deterministic FakeLLM fallback. "
+            "Set the provider API key to enable real synthesis.",
+            provider.value,
+            exc,
+        )
+        return FakeLLM()
+
+
+def _provider_name(provider: LLMProvider | str) -> str:
+    """Return the string name of an LLM provider for error messages."""
+    return provider.value if isinstance(provider, LLMProvider) else str(provider)
+
+
 async def assemble_context(
     query: str,
     user_id: uuid.UUID | None = None,
@@ -458,21 +529,8 @@ async def assemble_context(
     Returns:
         ContextResponse with assembled Markdown and metadata
     """
-    # Import here to avoid circular imports
-    from contextmine_core.embeddings import FakeEmbedder, get_embedder, parse_embedding_model_spec
-
     settings = get_settings()
-
-    query_embedding: list[float] | None = None
-    if settings.model_calls_enabled:
-        try:
-            emb_provider, emb_model = parse_embedding_model_spec(settings.default_embedding_model)
-            embedder = get_embedder(emb_provider, emb_model)
-        except Exception:
-            embedder = FakeEmbedder()
-
-        embed_result = await embedder.embed_batch([query])
-        query_embedding = embed_result.embeddings[0]
+    query_embedding = await _get_query_embedding(query)
 
     # Retrieve chunks
     search_response = await hybrid_search(
@@ -506,14 +564,16 @@ async def assemble_context(
 
     # Get or create LLM
     if llm is None:
-        try:
-            llm = get_llm(provider, model)
-        except ValueError:
-            # Fall back to FakeLLM if no API key
-            llm = FakeLLM()
+        llm = _resolve_llm(provider, model)
 
     # Generate response
-    markdown = await llm.generate(SYSTEM_PROMPT, user_prompt, max_tokens)
+    try:
+        markdown = await llm.generate(SYSTEM_PROMPT, user_prompt, max_tokens)
+    except Exception as exc:
+        raise ContextGenerationError(
+            f"LLM generation failed (provider={_provider_name(provider)}, "
+            f"model={model or getattr(llm, 'model', 'default')}): {exc}"
+        ) from exc
 
     # Extract sources
     sources = extract_sources(chunks)
@@ -559,20 +619,8 @@ async def assemble_context_stream(
         provider: LLM provider to use
         model: Optional model override
     """
-    from contextmine_core.embeddings import FakeEmbedder, get_embedder, parse_embedding_model_spec
-
     settings = get_settings()
-
-    query_embedding: list[float] | None = None
-    if settings.model_calls_enabled:
-        try:
-            emb_provider, emb_model = parse_embedding_model_spec(settings.default_embedding_model)
-            embedder = get_embedder(emb_provider, emb_model)
-        except Exception:
-            embedder = FakeEmbedder()
-
-        embed_result = await embedder.embed_batch([query])
-        query_embedding = embed_result.embeddings[0]
+    query_embedding = await _get_query_embedding(query)
 
     # Retrieve chunks
     search_response = await hybrid_search(
@@ -601,10 +649,13 @@ async def assemble_context_stream(
     # Build prompt and stream response
     user_prompt = build_context_prompt(query, chunks)
 
-    try:
-        llm = get_llm(provider, model)
-    except ValueError:
-        llm = FakeLLM()
+    llm = _resolve_llm(provider, model)
 
-    async for text_chunk in llm.generate_stream(SYSTEM_PROMPT, user_prompt, max_tokens):
-        yield text_chunk
+    try:
+        async for text_chunk in llm.generate_stream(SYSTEM_PROMPT, user_prompt, max_tokens):
+            yield text_chunk
+    except Exception as exc:
+        raise ContextGenerationError(
+            f"LLM streaming failed (provider={_provider_name(provider)}, "
+            f"model={model or getattr(llm, 'model', 'default')}): {exc}"
+        ) from exc

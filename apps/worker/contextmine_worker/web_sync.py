@@ -124,12 +124,25 @@ def _normalize_url(url: str) -> str:
     return parsed._replace(fragment="").geturl()
 
 
+def _is_excluded(url: str, exclude_patterns: list[str] | None) -> bool:
+    """Check if a URL matches any exclude pattern (case-insensitive substring).
+
+    Used to keep non-content pages (redirect stubs, search result pages, ...)
+    out of the index, e.g. Zendesk '/related/click' and '/search?' URLs.
+    """
+    if not exclude_patterns:
+        return False
+    lowered = url.lower()
+    return any(pattern.lower() in lowered for pattern in exclude_patterns)
+
+
 def _extract_links_from_html(
     raw_html: str,
     url: str,
     base_url: str,
     visited: set[str],
     queue: deque[str],
+    exclude_patterns: list[str] | None = None,
 ) -> None:
     """Parse HTML and enqueue in-scope links for BFS crawling."""
     try:
@@ -138,7 +151,11 @@ def _extract_links_from_html(
         for element, _attr, link, _pos in tree.iterlinks():
             if element.tag == "a":
                 clean_link = _normalize_url(link)
-                if clean_link not in visited and is_url_in_scope(clean_link, base_url):
+                if (
+                    clean_link not in visited
+                    and is_url_in_scope(clean_link, base_url)
+                    and not _is_excluded(clean_link, exclude_patterns)
+                ):
                     queue.append(clean_link)
     except Exception:
         pass
@@ -162,6 +179,7 @@ def _fetch_and_extract_page(
     base_url: str,
     visited: set[str],
     queue: deque[str],
+    exclude_patterns: list[str] | None = None,
 ) -> WebPage | None:
     """Fetch a URL and return a WebPage, or None if not suitable."""
     try:
@@ -179,7 +197,7 @@ def _fetch_and_extract_page(
     if not raw_html or len(raw_html.encode("utf-8")) > MAX_PAGE_SIZE:
         return None
 
-    _extract_links_from_html(raw_html, url, base_url, visited, queue)
+    _extract_links_from_html(raw_html, url, base_url, visited, queue, exclude_patterns)
 
     markdown = extract_markdown_with_trafilatura(raw_html)
     if not markdown or len(markdown.strip()) < 50:
@@ -204,6 +222,7 @@ def _crawl_python(
     user_agent: str = DEFAULT_USER_AGENT,
     delay_ms: int = DEFAULT_DELAY_MS,
     start_url: str | None = None,
+    exclude_patterns: list[str] | None = None,
 ) -> list[WebPage]:
     """Pure Python crawler using httpx + lxml for link extraction.
 
@@ -231,7 +250,10 @@ def _crawl_python(
             if not is_url_in_scope(url, base_url):
                 continue
 
-            page = _fetch_and_extract_page(client, url, base_url, visited, queue)
+            if _is_excluded(url, exclude_patterns):
+                continue
+
+            page = _fetch_and_extract_page(client, url, base_url, visited, queue, exclude_patterns)
             if page is not None:
                 pages.append(page)
                 logger.info("Crawled %s (%d/%d)", url, len(pages), max_pages)
@@ -248,6 +270,7 @@ def _crawl_spider_md(
     user_agent: str = DEFAULT_USER_AGENT,
     delay_ms: int = DEFAULT_DELAY_MS,
     start_url: str | None = None,
+    exclude_patterns: list[str] | None = None,
 ) -> list[WebPage]:
     """Run the spider_md Rust binary and collect results."""
     crawl_start = start_url or base_url
@@ -285,6 +308,8 @@ def _crawl_spider_md(
             continue
         try:
             data = json.loads(line)
+            if _is_excluded(data["url"], exclude_patterns):
+                continue
             html = data["html"]
 
             if len(html.encode("utf-8")) > MAX_PAGE_SIZE:
@@ -317,6 +342,7 @@ def run_spider_md(
     user_agent: str = DEFAULT_USER_AGENT,
     delay_ms: int = DEFAULT_DELAY_MS,
     start_url: str | None = None,
+    exclude_patterns: list[str] | None = None,
 ) -> list[WebPage]:
     """Crawl a website and return extracted pages.
 
@@ -331,6 +357,7 @@ def run_spider_md(
         user_agent=user_agent,
         delay_ms=delay_ms,
         start_url=start_url,
+        exclude_patterns=exclude_patterns,
     )
 
     if pages:
@@ -345,4 +372,5 @@ def run_spider_md(
         user_agent=user_agent,
         delay_ms=delay_ms,
         start_url=start_url,
+        exclude_patterns=exclude_patterns,
     )

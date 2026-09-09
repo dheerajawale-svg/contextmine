@@ -8,6 +8,7 @@ Covers: agent_sdk, joern, telemetry/setup, validation/connectors, validation/ser
 from __future__ import annotations
 
 import json
+import math
 import os
 import uuid
 from pathlib import Path
@@ -684,6 +685,18 @@ class TestFakeEmbedder:
         embedder = FakeEmbedder(dimension=8)
         vectors = await embedder.embed_texts(["a", "b"])
         assert len(vectors) == 2
+
+    async def test_embeddings_are_finite_for_pgvector(self) -> None:
+        """Regression: hash bytes decoding to NaN/inf float32 must not leak into vectors.
+
+        pgvector rejects vectors containing NaN ("NaN not allowed in vector").
+        Inputs like "a"/"b"/"c" previously produced multiple NaN components at
+        the default 1536 dimensions.
+        """
+        embedder = FakeEmbedder(dimension=1536)
+        result = await embedder.embed_batch(["a", "b", "c", "hello world"])
+        for vector in result.embeddings:
+            assert all(math.isfinite(x) for x in vector)
 
     def test_properties(self) -> None:
         embedder = FakeEmbedder(dimension=1536)

@@ -1,17 +1,44 @@
 # Running the Full Stack Locally with WSL Containers (`wslc.exe`)
 
+## Contents
+
+- [1. Prerequisites](#1-prerequisites-one-time-powershell-as-admin)
+- [2. Build the two app images](#2-build-the-two-app-images)
+- [3. Run the services](#3-run-the-services-in-dependency-order)
+  - [3.0 Create a user-defined network](#30-create-a-user-defined-network-required-for-container-name-dns)
+  - [3.1 Postgres + pgvector + AGE](#31-postgres--pgvector--age)
+  - [3.2 Prefect server](#32-prefect-server-worker-orchestration-ui)
+  - [3.3 API](#33-api)
+  - [3.4 Worker](#34-worker)
+  - [3.5 Optional: CodeCharta and OTEL](#35-optional-codecharta-and-otel)
+- [4. Migrations, verify, first sync](#4-migrations-verify-first-sync)
+- [5. Quick restart after machine reboot](#5-quick-restart-after-machine-reboot)
+  - [Step 1: Start existing containers](#step-1-start-existing-containers-in-order)
+  - [Step 2: Verification commands](#step-2-verification-commands)
+- [Path B: WSL-native hybrid](#path-b-recommended-fallback-wsl-native-hybrid)
+- [6. Teardown & cleanup](#6-teardown--cleanup)
+  - [Option A: Routine shutdown](#option-a-routine-shutdown-stop-only--recommended-for-daily-use)
+  - [Option B: Full wipe & reset](#option-b-full-wipe--reset-clean-slate--reclaim-disk)
+- [Caveats vs. Docker Compose](#caveats-vs-docker-compose)
+
 Microsoft's **WSL container** feature replaces the Docker engine with `wslc.exe`, a Docker-familiar CLI built directly into WSL — no Docker Desktop required.
 
 > **Repo location:** the repo now lives on the WSL filesystem at `\\wsl.localhost\Ubuntu\home\dheeraj\gitrepos\personal\contextmine` — inside WSL that same path is `/home/dheeraj/gitrepos/personal/contextmine` (`~/gitrepos/personal/contextmine`). It was previously at `C:\personal\contextmine`.
 
-References:
+<details>
+<summary>References</summary>
 
 - [WSL container](https://learn.microsoft.com/windows/wsl/wsl-container)
 - [Get started with WSL container](https://learn.microsoft.com/windows/wsl/tutorials/wsl-containers)
 
+</details>
+
 `wslc` supports `run` (with `-d`, `-p` port publishing, `--name`, `--rm`, `-e`), `build` (Dockerfiles/Containerfiles), `exec`, `container list/stop/logs/inspect/prune`, `image list/prune`, and `stats`.
 
 > **Key difference vs. Docker Compose:** `wslc` has **no compose equivalent** — each compose service becomes its own `wslc run` command. Service-to-service DNS requires a **user-defined network**: the default `bridge` network does *not* resolve container names (see section 3.0 and the networking note).
+
+<details>
+<summary>Section 1: Prerequisites</summary>
 
 ## 1. Prerequisites (one-time, PowerShell as admin)
 
@@ -26,6 +53,11 @@ wslc run --rm hello-world
 ```
 
 Also configure `.env` exactly as in the Docker guide (`cp .env.example .env`, GitHub OAuth keys, secrets, `MODEL_CALLS_ENABLED` choice) — nothing there changes.
+
+</details>
+
+<details>
+<summary>Section 2: Build the two app images</summary>
 
 ## 2. Build the two app images
 
@@ -46,9 +78,17 @@ wslc.exe image list   # verify both, plus pulled infra images
 
 > **Performance tip (from MS docs):** already satisfied — the repo is on the WSL filesystem (`\\wsl.localhost\Ubuntu\home\dheeraj\gitrepos\personal\contextmine`), not on a Windows drive like the old `C:\personal\contextmine` location, so builds and mounts run at native WSL speed.
 
+</details>
+
+<details>
+<summary>Section 3: Run the services</summary>
+
 ## 3. Run the services (in dependency order)
 
 > Run all `wslc` commands below from the same **WSL terminal** as the build step (section 2). `wslc` is a Windows binary — from inside WSL always call it as **`wslc.exe`** (WSL interop resolves it); from PowerShell plain `wslc` works. If `wslc.exe` is not found in WSL, enable `[interop]` `enabled=true` / `appendWindowsPath=true` in `/etc/wsl.conf`, then `wsl --shutdown` from Windows and reopen.
+
+<details>
+<summary>3.0 Create a user-defined network</summary>
 
 ### 3.0 Create a user-defined network (required for container-name DNS)
 
@@ -57,6 +97,11 @@ The default `bridge` network does **not** register container names in DNS (verif
 ```bash
 wslc.exe network create contextmine-net
 ```
+
+</details>
+
+<details>
+<summary>3.1 Postgres + pgvector + AGE</summary>
 
 ### 3.1 Postgres + pgvector + AGE
 
@@ -71,6 +116,11 @@ wslc.exe run -d --name contextmine-postgres \
 ```
 > The pg4ai image is `linux/amd64`-only (compose sets `platform: linux/amd64`). `wslc` platform-emulation support is undocumented — on ARM machines verify with `wslc container logs contextmine-postgres` that it actually starts.
 
+</details>
+
+<details>
+<summary>3.2 Prefect server</summary>
+
 ### 3.2 Prefect server (worker orchestration UI)
 
 ```bash
@@ -82,6 +132,11 @@ wslc.exe run -d --name contextmine-prefect \
   -e PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://contextmine:contextmine@contextmine-postgres:5432/prefect \
   prefecthq/prefect:3.8.4-python3.14 prefect server start --host 0.0.0.0
 ```
+
+</details>
+
+<details>
+<summary>3.3 API</summary>
 
 ### 3.3 API
 
@@ -100,16 +155,30 @@ wslc.exe run -d --name contextmine-api \
 
 *(Pass every needed `.env` value as `-e` flags; `wslc` `--env-file` support is undocumented — check `wslc run --help`. Note: `DEBUG=true` bypasses the requirement for `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` for local dev. If testing the full GitHub OAuth flow, append `-e GITHUB_CLIENT_ID=... -e GITHUB_CLIENT_SECRET=...`. `PREFECT_API_URL` is **required** — the default `http://prefect-server:4200/api` does not resolve on `contextmine-net`, so `/api/sources/{id}/sync-now` fails with 502 without it. Append `-e MODEL_CALLS_ENABLED=false` for model-free operation (no AI API keys; FTS-only retrieval, deterministic extraction during sync).)*
 
+</details>
+
+<details>
+<summary>3.4 Worker</summary>
+
 ### 3.4 Worker
 
 ```bash
+# PREFECT_DUE_INTERVAL_SECONDS=300: due-source dispatcher ticks every 5 min instead of the 60s code default
+# (avoids a large past-due run backlog after downtime). MODEL_CALLS_ENABLED=false: model-free FTS-only mode.
 wslc.exe run -d --name contextmine-worker \
   --network contextmine-net --network-alias contextmine-worker \
   -e DATABASE_URL=postgresql+asyncpg://contextmine:contextmine@contextmine-postgres:5432/contextmine \
   -e PREFECT_API_URL=http://contextmine-prefect:4200/api \
+  -e PREFECT_DUE_INTERVAL_SECONDS=300 \
+  -e MODEL_CALLS_ENABLED=false \
   -v "$PWD/.wslc/worker-data":/data \
   contextmine-worker
 ```
+
+</details>
+
+<details>
+<summary>3.5 Optional: CodeCharta and OTEL</summary>
 
 ### 3.5 Optional: CodeCharta and OTEL
 
@@ -117,6 +186,8 @@ wslc.exe run -d --name contextmine-worker \
 wslc.exe run -d --name contextmine-codecharta --network contextmine-net -p 9001:80 codecharta/codecharta-visualization:1.143.0
 # OTEL collector: otel/opentelemetry-collector-contrib:0.159.0 with the config from scripts/docker/otel/
 ```
+
+</details>
 
 ## ⚠️ Networking note — container-name DNS
 
@@ -138,11 +209,21 @@ wslc.exe network connect contextmine-net contextmine-otel
 wslc.exe exec contextmine-api python -c "import socket; socket.gethostbyname('contextmine-postgres')"
 ```
 
+<details>
+<summary>Networking alternatives</summary>
+
 - **If a container is already on `contextmine-net`** (started with `--network contextmine-net` per sections 3.1–3.5) → `network connect` for it is unnecessary; it can be skipped.
 - **If host networking is preferred instead** → run all with `--network host` and use `localhost:5433` / `localhost:4200` everywhere.
 - **If neither works** → use **Path B** below, which avoids container-to-container networking entirely.
 
+</details>
+
 > Note: containers keep their default-bridge connection after being attached to `contextmine-net`; published ports and existing connections are unaffected.
+
+</details>
+
+<details>
+<summary>Section 4: Migrations, verify, first sync</summary>
 
 ## 4. Migrations, verify, first sync
 
@@ -161,9 +242,17 @@ Then: admin UI at `http://localhost:8111` → GitHub OAuth login → create Coll
 
 > Remember the OAuth callback in your GitHub App must match the API port you published (`8111`, unlike the native-dev default `8000`).
 
+</details>
+
+<details>
+<summary>Section 5: Quick restart after machine reboot</summary>
+
 ## 5. Quick restart after machine reboot
 
 When Windows or WSL restarts, containers created without `--rm` persist in a stopped state. You do not need to rebuild images or recreate the network.
+
+<details>
+<summary>Step 1: Start existing containers</summary>
 
 ### Step 1: Start existing containers (in order)
 > **Important:** `wslc.exe container start` takes only **one container ID/name at a time** (unlike `container stop`).
@@ -180,6 +269,11 @@ for c in contextmine-postgres contextmine-prefect contextmine-api contextmine-wo
 ```
 
 *(Note: `contextmine-api` automatically executes database migrations via Alembic on startup inside its entrypoint script).*
+
+</details>
+
+<details>
+<summary>Alternative: Recreate containers from scratch</summary>
 
 ### (Alternative) If containers were deleted / recreating from scratch
 If you ran `wslc.exe container prune` or need to recreate containers fresh:
@@ -226,6 +320,11 @@ wslc.exe run -d --name contextmine-worker \
   contextmine-worker
 ```
 
+</details>
+
+<details>
+<summary>Step 2: Verification commands</summary>
+
 ### Step 2: Verification commands
 
 ```bash
@@ -244,6 +343,8 @@ wslc.exe container logs contextmine-api
 wslc.exe container logs -f contextmine-api   # follow live
 ```
 
+</details>
+
 ### Application URLs
 
 | Service | URL | Notes |
@@ -255,34 +356,17 @@ wslc.exe container logs -f contextmine-api   # follow live
 | **Prefect Orchestration UI** | [http://localhost:4200](http://localhost:4200) | Dashboard for workflow runs and background sync jobs |
 | **CodeCharta (optional)** | [http://localhost:9001](http://localhost:9001) | Code visualization UI (if container started) |
 
-## Path B (recommended fallback): WSL-native hybrid
+</details>
 
-Per the MS docs, WSL *is* a full Linux environment — so the most robust WSL setup runs only **stateful infra in `wslc` containers** (Postgres + Prefect) and everything else natively inside your WSL distro, eliminating the undocumented container-networking concern:
-
-```bash
-# Inside WSL (Ubuntu) — repo root: ~/gitrepos/personal/contextmine
-# Infra containers already running via wslc (sections 3.1–3.2):
-cd ~/gitrepos/personal/contextmine
-
-uv sync --all-packages
-
-cd packages/core && DATABASE_URL=postgresql+asyncpg://contextmine:contextmine@localhost:5433/contextmine \
-  uv run alembic upgrade head && cd ../..
-
-cd apps/web && npm install && npm run build && cd ../..
-
-# Terminal 1: API
-STATIC_DIR=apps/web/dist uv run uvicorn apps.api.app.main:app --reload --port 8000
-
-# Terminal 2: worker
-uv run python -m contextmine_worker.main
-```
-
-From WSL, containers on published ports are reachable at `localhost:5433` / `localhost:4200` (WSL2 localhost forwarding), which matches the documented, guaranteed behavior.
+<details>
+<summary>Section 6: Teardown & cleanup</summary>
 
 ## 6. Teardown & cleanup
 
 Depending on your goal:
+
+<details>
+<summary>Option A: Routine shutdown</summary>
 
 ### Option A: Routine shutdown (Stop only — recommended for daily use)
 Stops containers without deleting them. Containers and network configurations are preserved. On your next session or reboot, simply run **Section 5 (Step 1: Start existing containers)**.
@@ -290,6 +374,11 @@ Stops containers without deleting them. Containers and network configurations ar
 ```bash
 wslc.exe container stop contextmine-worker contextmine-api contextmine-prefect contextmine-postgres
 ```
+
+</details>
+
+<details>
+<summary>Option B: Full wipe & reset</summary>
 
 ### Option B: Full wipe & reset (Clean slate / reclaim disk)
 Deletes containers and the network. On your next session or reboot, you will need to run **Section 5 (Alternative: Recreating from scratch)**.
@@ -305,6 +394,10 @@ wslc.exe network remove contextmine-net   # removes user-defined network
 # 3. (Optional) Reclaim unused image space
 wslc.exe image prune
 ```
+
+</details>
+
+</details>
 
 ## Caveats vs. Docker Compose
 

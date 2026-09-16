@@ -12,9 +12,14 @@ from contextmine_core.research.checkpoints import (
     init_research_checkpointer,
 )
 from contextmine_core.telemetry import init_telemetry, shutdown_telemetry
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import _rate_limit_exceeded_handler
@@ -143,6 +148,28 @@ def create_app() -> FastAPI:
 
     _register_api_routes(app)
     app.mount("/mcp", mcp_app)
+
+    @app.api_route(
+        "/mcp",
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def redirect_mcp_trailing_slash(request: Request) -> RedirectResponse:
+        """Redirect bare /mcp (no trailing slash) to /mcp/.
+
+        Starlette's Mount("/mcp", mcp_app) only matches paths of the form
+        "/mcp/..." - the bare "/mcp" path never reaches the mounted FastMCP
+        app. Without this route, MCP clients that use "/mcp" as the server
+        URL (e.g. VS Code) fall through to the SPA catch-all route, which is
+        GET-only, so POST requests (used for the MCP Streamable HTTP
+        handshake) get a 405 and the connection never succeeds. A 307
+        preserves the original method and body, so POST/DELETE/etc. keep
+        working after the redirect.
+        """
+        target = "/mcp/"
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
+        return RedirectResponse(url=target, status_code=307)
 
     @app.get("/.well-known/{well_known_type}")
     @app.get("/.well-known/{well_known_type}/{path:path}")
